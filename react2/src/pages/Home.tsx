@@ -8,8 +8,8 @@ const Home = () => {
     <div className="page">
       <div className="container">
         <section className="hero">
-          <h1>Welcome to MyApp</h1>
-          <p>Your digital solution partner for modern business needs.</p>
+          <h1>RAG 1</h1>
+          <p>AI Chatbot: chat about our website content & and with your uploaded documents.</p>
           <button className="cta-button" onClick={handleGetStarted}>Get Started</button>
         </section>
         

@@ -8,12 +8,19 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  sources?: string[]; // NEU: Quellen aus Knowledge Base
 }
 
 interface Model {
   id: string;
   name: string;
   description: string;
+}
+
+interface KnowledgeBaseFile {
+  id: string;
+  name: string;
+  uploadDate: Date;
 }
 
 const Chatbot: React.FC = () => {
@@ -29,6 +36,10 @@ const Chatbot: React.FC = () => {
   const [showUpload, setShowUpload] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
+  
+  // NEU: Knowledge Base Viewer
+  const [showKnowledgeBase, setShowKnowledgeBase] = useState(false);
+  const [knowledgeBaseFiles, setKnowledgeBaseFiles] = useState<KnowledgeBaseFile[]>([]);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -68,6 +79,25 @@ const Chatbot: React.FC = () => {
     }
   }, [instance, accounts]);
 
+  // NEU: Knowledge Base Files laden
+  const fetchKnowledgeBaseFiles = useCallback(async () => {
+    try {
+      const token = await getAccessToken();
+      const headers: HeadersInit = token
+        ? { Authorization: `Bearer ${token}` }
+        : {};
+
+      const response = await fetch('http://localhost:3001/api/admin/files', { headers });
+
+      if (response.ok) {
+        const data = await response.json();
+        setKnowledgeBaseFiles(data.files || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch knowledge base files:', error);
+    }
+  }, [getAccessToken]);
+
   // Modelle laden (stabil via useCallback)
   const fetchModels = useCallback(async () => {
     try {
@@ -95,14 +125,49 @@ const Chatbot: React.FC = () => {
     }
   }, [getAccessToken]);
 
-  // File Upload Handler
+  // NEU: Delete file from Knowledge Base
+  const deleteKnowledgeBaseFile = async (fileId: string, fileName: string) => {
+    if (!confirm(`Delete "${fileName}" from knowledge base?`)) return;
+    
+    try {
+      const token = await getAccessToken();
+      const headers: HeadersInit = token
+        ? { Authorization: `Bearer ${token}` }
+        : {};
+
+      const response = await fetch(`http://localhost:3001/api/admin/files/${fileId}`, {
+        method: 'DELETE',
+        headers
+      });
+
+      if (response.ok) {
+        await fetchKnowledgeBaseFiles();
+        
+        // Info message
+        const infoMessage: Message = {
+          id: Date.now().toString(),
+          role: 'assistant',
+          content: `Document "${fileName}" was removed from the knowledge base.`,
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, infoMessage]);
+      }
+    } catch (error) {
+      console.error('Failed to delete file:', error);
+    }
+  };
+
+  // File Upload Handler - erweitert für verschiedene Dateitypen
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
     
-    // Validiere Dateityp
-    if (file.type !== 'application/pdf') {
-      alert('Please select a PDF file');
+    // Erweiterte Validierung
+    const allowedExtensions = ['.pdf', '.txt', '.docx', '.md'];
+    const fileExtension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
+    
+    if (!allowedExtensions.includes(fileExtension)) {
+      alert(`Please select a valid file type: ${allowedExtensions.join(', ')}`);
       return;
     }
     
@@ -137,7 +202,7 @@ const Chatbot: React.FC = () => {
       });
       
       // Handle completion
-      xhr.addEventListener('load', () => {
+      xhr.addEventListener('load', async () => {
         if (xhr.status === 200) {
           setUploadStatus('success');
           
@@ -147,10 +212,13 @@ const Chatbot: React.FC = () => {
           const successMessage: Message = {
             id: Date.now().toString(),
             role: 'assistant',
-            content: `PDF "${file.name}" was successfully uploaded to the knowledge base. ${response.chunks ? `Created ${response.chunks} searchable chunks.` : ''} You can now ask questions about its content!`,
+            content: `Document "${file.name}" was successfully uploaded. ${response.chunks ? `Created ${response.chunks} searchable chunks.` : ''} You can now ask questions about it!`,
             timestamp: new Date()
           };
           setMessages(prev => [...prev, successMessage]);
+          
+          // Refresh KB files list
+          await fetchKnowledgeBaseFiles();
           
           // Reset nach 3 Sekunden
           setTimeout(() => {
@@ -185,7 +253,7 @@ const Chatbot: React.FC = () => {
       const errorMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
-        content: `Failed to upload PDF: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`,
+        content: `Failed to upload: ${error instanceof Error ? error.message : 'Unknown error'}`,
         timestamp: new Date()
       };
       setMessages(prev => [...prev, errorMessage]);
@@ -246,7 +314,8 @@ const Chatbot: React.FC = () => {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: data.response,
-        timestamp: new Date()
+        timestamp: new Date(),
+        sources: data.sources // NEU: Quellen hinzufügen
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -278,7 +347,8 @@ const Chatbot: React.FC = () => {
   // Effects
   useEffect(() => {
     fetchModels();
-  }, [fetchModels]);
+    fetchKnowledgeBaseFiles(); // NEU: KB Files beim Start laden
+  }, [fetchModels, fetchKnowledgeBaseFiles]);
 
   useEffect(() => {
     scrollToBottom();
@@ -326,19 +396,55 @@ const Chatbot: React.FC = () => {
                 checked={useKnowledgeBase}
                 onChange={(e) => setUseKnowledgeBase(e.target.checked)}
               />
-              Use Knowledge Base
+              Use KB
             </label>
             
             <button
               className="upload-kb-button"
               onClick={() => setShowUpload(!showUpload)}
-              title="Upload PDF to Knowledge Base"
+              title="Upload to Knowledge Base"
             >
-              Upload PDF
+              Upload
+            </button>
+            
+            {/* NEU: Knowledge Base Button */}
+            <button
+              className="kb-view-button"
+              onClick={() => setShowKnowledgeBase(!showKnowledgeBase)}
+              title="View Knowledge Base"
+            >
+              KB ({knowledgeBaseFiles.length})
             </button>
           </div>
 
-          {/* Upload Section */}
+          {/* NEU: Knowledge Base Viewer */}
+          {showKnowledgeBase && (
+            <div className="kb-viewer">
+              <div className="kb-viewer-header">
+                <h4>Knowledge Base Documents</h4>
+                <button onClick={() => setShowKnowledgeBase(false)}>×</button>
+              </div>
+              <div className="kb-files-list">
+                {knowledgeBaseFiles.length === 0 ? (
+                  <p className="kb-empty">No documents uploaded yet</p>
+                ) : (
+                  knowledgeBaseFiles.map(file => (
+                    <div key={file.id} className="kb-file-item">
+                      <span className="kb-file-name">{file.name}</span>
+                      <button 
+                        className="kb-file-delete"
+                        onClick={() => deleteKnowledgeBaseFile(file.id, file.name)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Upload Section - erweitert */}
           {showUpload && (
             <div className="upload-section">
               <div className="upload-container">
@@ -346,18 +452,18 @@ const Chatbot: React.FC = () => {
                   type="file"
                   ref={fileInputRef}
                   onChange={handleFileUpload}
-                  accept=".pdf"
+                  accept=".pdf,.txt,.docx,.md"
                   style={{ display: 'none' }}
                 />
                 
                 {uploadStatus === 'idle' && (
                   <div className="upload-prompt">
-                    <p>Upload a PDF document to the knowledge base</p>
+                    <p>Upload a document to the knowledge base</p>
                     <button
                       className="upload-button"
                       onClick={() => fileInputRef.current?.click()}
                     >
-                      Choose PDF File
+                      Choose File (PDF, TXT, DOCX, MD)
                     </button>
                     <p className="upload-hint">Max file size: 10MB</p>
                   </div>
@@ -365,7 +471,7 @@ const Chatbot: React.FC = () => {
                 
                 {uploadStatus === 'uploading' && (
                   <div className="upload-progress">
-                    <p>Uploading and processing PDF...</p>
+                    <p>Processing document...</p>
                     <div className="progress-bar">
                       <div 
                         className="progress-fill" 
@@ -402,13 +508,8 @@ const Chatbot: React.FC = () => {
           <div className="chatbot-messages">
             {messages.length === 0 ? (
               <div className="welcome-message">
-                <p>Hello! I'm your AI assistant. I can help you with:</p>
-                <ul>
-                  <li>Questions about our services and products</li>
-                  <li>Information from our knowledge base</li>
-                  <li>General inquiries about the company</li>
-                </ul>
-                <p>How can I help you today?</p>
+                <p>Hello! How can I help you today?</p>
+                <p>You can ask me about our services, products, or any documents in the knowledge base.</p>
               </div>
             ) : (
               messages.map(message => (
@@ -418,6 +519,15 @@ const Chatbot: React.FC = () => {
                 >
                   <div className="message-content">
                     {message.content}
+                    {/* NEU: Quellen anzeigen */}
+                    {message.sources && message.sources.length > 0 && (
+                      <div className="message-sources">
+                        <span className="source-label">Source:</span>
+                        {message.sources.map((source, idx) => (
+                          <span key={idx} className="source-item">{source}</span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <div className="message-time">
                     {message.timestamp.toLocaleTimeString()}

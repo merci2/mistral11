@@ -21,6 +21,11 @@ interface MistralResponse {
   };
 }
 
+interface ChatResponse {
+  response: string;
+  sources?: string[];
+}
+
 export class ChatService {
   private conversationHistory: Map<string, Message[]> = new Map();
   private mistralApiKey: string;
@@ -29,7 +34,7 @@ export class ChatService {
     this.mistralApiKey = process.env.MISTRAL_API_KEY || '';
   }
 
-  async chat(message: string, context: string, model: string, userId?: string): Promise<string> {
+  async chat(message: string, context: string, model: string, userId?: string): Promise<ChatResponse> {
     try {
       // Get or create conversation history for user
       const sessionId = userId || 'default';
@@ -62,11 +67,20 @@ export class ChatService {
         history.splice(0, history.length - 20);
       }
       
-      return assistantMessage;
+      // Extract sources from context
+      const sources = this.extractSources(context);
+      
+      return {
+        response: assistantMessage,
+        sources: sources.length > 0 ? sources : undefined
+      };
     } catch (error) {
       console.error('Chat error:', error);
       // Fallback response
-      return this.getFallbackResponse(message);
+      return {
+        response: this.getFallbackResponse(message),
+        sources: undefined
+      };
     }
   }
 
@@ -85,8 +99,8 @@ export class ChatService {
         body: JSON.stringify({
           model: model,
           messages: messages,
-          temperature: 0.7,
-          max_tokens: 1000,
+          temperature: 0.3,  // Niedrigere Temperatur für präzisere Antworten
+          max_tokens: 200,   // Begrenzte Tokens für kürzere Antworten
         })
       });
 
@@ -109,9 +123,14 @@ export class ChatService {
   }
 
   private buildSystemMessage(context: string): string {
-    let systemMessage = `You are a helpful assistant for a website. You can answer questions about:
-1. The website content and services
-2. Information from the knowledge base documents
+    let systemMessage = `You are a helpful assistant for a website. 
+
+CRITICAL INSTRUCTIONS:
+1. Be EXTREMELY CONCISE - maximum 2-3 sentences per response
+2. Give direct, precise answers without unnecessary elaboration
+3. When citing contact information (emails, phone numbers, URLs), always provide them COMPLETELY and EXACTLY as shown
+4. NEVER truncate or shorten email addresses - always include the full domain (.com, .de, etc.)
+5. Do not add pleasantries or filler text
 
 Website Information:
 - Company: MyApp
@@ -130,35 +149,53 @@ Available Pages:
 - FAQ: Frequently asked questions`;
 
     if (context) {
-      systemMessage += `\n\nRelevant information from knowledge base:\n${context}`;
+      systemMessage += `\n\nRELEVANT KNOWLEDGE BASE INFORMATION:\n${context}\n\nIMPORTANT: Use the knowledge base information above to answer. If contact details appear in the knowledge base, use those EXACTLY as written, including complete email addresses with full domains.`;
     }
 
-    systemMessage += `\n\nPlease provide helpful, accurate, and concise answers. If you don't have information about something specific, say so politely.`;
+    systemMessage += `\n\nRemember: Keep responses SHORT (2-3 sentences max) and ACCURATE. Always provide complete email addresses and contact information.`;
 
     return systemMessage;
+  }
+
+  private extractSources(context: string): string[] {
+    const sources: string[] = [];
+    if (!context) return sources;
+    
+    // Extract source names from context format: [Source: filename]
+    const sourcePattern = /\[Source: ([^\]]+)\]/g;
+    let match;
+    
+    while ((match = sourcePattern.exec(context)) !== null) {
+      const source = match[1];
+      if (!sources.includes(source)) {
+        sources.push(source);
+      }
+    }
+    
+    return sources;
   }
 
   private getFallbackResponse(message: string): string {
     const messageLower = message.toLowerCase();
     
-    // Einfache Fallback-Antworten
+    // Kurze, präzise Fallback-Antworten
     if (messageLower.includes('hello') || messageLower.includes('hi')) {
-      return 'Hello! How can I help you today?';
+      return 'Hello! How can I help you?';
     }
     
     if (messageLower.includes('services')) {
-      return 'We offer Web Development, Mobile Apps, and Consulting services. Would you like to know more about any specific service?';
+      return 'We offer Web Development, Mobile Apps, and Consulting services.';
     }
     
     if (messageLower.includes('contact')) {
-      return 'You can reach us at info@myapp.com or call +49 123 456 789. You can also use the contact form on our Contact page.';
+      return 'Contact us at info@myapp.com or +49 123 456 789.';
     }
     
     if (messageLower.includes('product')) {
-      return 'We have two main products: Product A for enterprise clients and Product B for small and medium businesses. Which one interests you?';
+      return 'We offer Product A for enterprises and Product B for SMBs.';
     }
     
-    return 'I apologize, but I\'m having trouble connecting to my AI service right now. You can still browse our website or contact us directly at info@myapp.com for assistance.';
+    return 'I cannot access the AI service right now. Please contact info@myapp.com for assistance.';
   }
 
   clearHistory(userId?: string): void {
