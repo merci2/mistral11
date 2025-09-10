@@ -1,0 +1,48 @@
+# React2
+
+# Logs aus react2
+react2/logs/
+react2/*.log
+react2/npm-debug.log*
+react2/yarn-debug.log*
+react2/yarn-error.log*
+react2/pnpm-debug.log*
+react2/lerna-debug.log*
+
+# Build- und Dependency-Ordner
+react2/node_modules/
+react2/dist/
+react2/dist-ssr/
+react2/*.local
+
+# Editor-Dateien
+react2/.vscode/*
+!react2/.vscode/extensions.json
+react2/.idea/
+react2/.DS_Store
+react2/*.suo
+react2/*.ntvs*
+react2/*.njsproj
+react2/*.sln
+react2/*.sw?
+
+# Environment-Dateien
+react2/.env*
+
+# Optional: Beispiel-Env-Datei behalten
+!react2/.env.example
+
+
+
+# Backend
+backend/node_modules/
+backend/.env*
+backend/__pycache__/
+backend/.venv/
+
+
+
+
+# Allgemein
+*.log
+.DS_Store
