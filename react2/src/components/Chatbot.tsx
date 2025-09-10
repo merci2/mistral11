@@ -24,7 +24,14 @@ const Chatbot: React.FC = () => {
   const [selectedModel, setSelectedModel] = useState('mistral-small');
   const [models, setModels] = useState<Model[]>([]);
   const [useKnowledgeBase, setUseKnowledgeBase] = useState(true);
+  
+  // Upload-States
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { instance, accounts } = useMsal();
 
   // Event Listener für "Get Started" Button
@@ -88,6 +95,108 @@ const Chatbot: React.FC = () => {
     }
   }, [getAccessToken]);
 
+  // File Upload Handler
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    // Validiere Dateityp
+    if (file.type !== 'application/pdf') {
+      alert('Please select a PDF file');
+      return;
+    }
+    
+    // Validiere Dateigröße (max 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      alert('File size must be less than 10MB');
+      return;
+    }
+    
+    setUploadStatus('uploading');
+    setUploadProgress(0);
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    try {
+      const token = await getAccessToken();
+      const headers: HeadersInit = {};
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      const xhr = new XMLHttpRequest();
+      
+      // Progress tracking
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          const percentComplete = (e.loaded / e.total) * 100;
+          setUploadProgress(percentComplete);
+        }
+      });
+      
+      // Handle completion
+      xhr.addEventListener('load', () => {
+        if (xhr.status === 200) {
+          setUploadStatus('success');
+          
+          const response = JSON.parse(xhr.responseText);
+          
+          // Zeige Erfolgsmeldung
+          const successMessage: Message = {
+            id: Date.now().toString(),
+            role: 'assistant',
+            content: `PDF "${file.name}" was successfully uploaded to the knowledge base. ${response.chunks ? `Created ${response.chunks} searchable chunks.` : ''} You can now ask questions about its content!`,
+            timestamp: new Date()
+          };
+          setMessages(prev => [...prev, successMessage]);
+          
+          // Reset nach 3 Sekunden
+          setTimeout(() => {
+            setUploadStatus('idle');
+            setUploadProgress(0);
+            setShowUpload(false);
+            if (fileInputRef.current) {
+              fileInputRef.current.value = '';
+            }
+          }, 3000);
+        } else {
+          const errorResponse = JSON.parse(xhr.responseText);
+          throw new Error(errorResponse.error || 'Upload failed');
+        }
+      });
+      
+      xhr.addEventListener('error', () => {
+        throw new Error('Network error');
+      });
+      
+      // Sende Request
+      xhr.open('POST', 'http://localhost:3001/api/admin/upload');
+      Object.entries(headers).forEach(([key, value]) => {
+        xhr.setRequestHeader(key, value as string);
+      });
+      xhr.send(formData);
+      
+    } catch (error) {
+      console.error('Upload error:', error);
+      setUploadStatus('error');
+      
+      const errorMessage: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: `Failed to upload PDF: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`,
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, errorMessage]);
+      
+      setTimeout(() => {
+        setUploadStatus('idle');
+        setUploadProgress(0);
+      }, 3000);
+    }
+  };
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -103,6 +212,7 @@ const Chatbot: React.FC = () => {
     };
 
     setMessages(prev => [...prev, userMessage]);
+    const currentMessage = inputMessage;
     setInputMessage('');
     setIsLoading(true);
 
@@ -120,7 +230,7 @@ const Chatbot: React.FC = () => {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          message: inputMessage,
+          message: currentMessage,
           model: selectedModel,
           useKnowledgeBase
         })
@@ -182,7 +292,7 @@ const Chatbot: React.FC = () => {
         onClick={() => setIsOpen(!isOpen)}
         aria-label="Toggle chat"
       >
-        {isOpen ? '✕' : '💬'}
+        {isOpen ? '×' : 'Chat'}
       </button>
 
       {/* Chat Window */}
@@ -192,7 +302,7 @@ const Chatbot: React.FC = () => {
             <h3>AI Assistant</h3>
             <div className="chatbot-controls">
               <button onClick={clearChat} className="clear-button">Clear</button>
-              <button onClick={() => setIsOpen(false)} className="close-button">✕</button>
+              <button onClick={() => setIsOpen(false)} className="close-button">×</button>
             </div>
           </div>
 
@@ -218,7 +328,75 @@ const Chatbot: React.FC = () => {
               />
               Use Knowledge Base
             </label>
+            
+            <button
+              className="upload-kb-button"
+              onClick={() => setShowUpload(!showUpload)}
+              title="Upload PDF to Knowledge Base"
+            >
+              Upload PDF
+            </button>
           </div>
+
+          {/* Upload Section */}
+          {showUpload && (
+            <div className="upload-section">
+              <div className="upload-container">
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileUpload}
+                  accept=".pdf"
+                  style={{ display: 'none' }}
+                />
+                
+                {uploadStatus === 'idle' && (
+                  <div className="upload-prompt">
+                    <p>Upload a PDF document to the knowledge base</p>
+                    <button
+                      className="upload-button"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      Choose PDF File
+                    </button>
+                    <p className="upload-hint">Max file size: 10MB</p>
+                  </div>
+                )}
+                
+                {uploadStatus === 'uploading' && (
+                  <div className="upload-progress">
+                    <p>Uploading and processing PDF...</p>
+                    <div className="progress-bar">
+                      <div 
+                        className="progress-fill" 
+                        style={{ width: `${uploadProgress}%` }}
+                      />
+                    </div>
+                    <p>{Math.round(uploadProgress)}%</p>
+                  </div>
+                )}
+                
+                {uploadStatus === 'success' && (
+                  <div className="upload-success">
+                    <p>Upload successful!</p>
+                  </div>
+                )}
+                
+                {uploadStatus === 'error' && (
+                  <div className="upload-error">
+                    <p>Upload failed. Please try again.</p>
+                  </div>
+                )}
+              </div>
+              
+              <button 
+                className="upload-close"
+                onClick={() => setShowUpload(false)}
+              >
+                ×
+              </button>
+            </div>
+          )}
 
           {/* Messages */}
           <div className="chatbot-messages">
