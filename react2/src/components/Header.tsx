@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../config/useAuth';
-import { appConfig } from '../config/authConfig';
+// import { appConfig } from '../config/authConfig';
 
 const Header = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
