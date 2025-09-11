@@ -112,7 +112,7 @@ app.get('/api/health', (req: Request, res: Response) => {
   });
 });
 
-// Chat endpoint
+// Chat endpoint - AKTUALISIERT für sources support
 app.post('/api/chat', async (req: Request, res: Response) => {
   try {
     const { message, model = 'mistral-small', useKnowledgeBase = true } = req.body;
@@ -131,8 +131,9 @@ app.post('/api/chat', async (req: Request, res: Response) => {
       }
     }
     
-    const response = await chatService.chat(message, context, model);
-    res.json({ response });
+    // ChatService gibt jetzt ein Objekt mit response und sources zurück
+    const result = await chatService.chat(message, context, model);
+    res.json(result); // Sendet { response: string, sources?: string[] }
   } catch (error) {
     console.error('Chat error:', error);
     res.status(500).json({ error: 'Failed to process chat request' });
