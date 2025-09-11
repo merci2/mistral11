@@ -1,14 +1,17 @@
 // src/components/Chatbot.tsx
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useMsal } from '@azure/msal-react';
 import '../styles/Chatbot.css';
+import { useAuth } from '../config/useAuth';
 
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
-  sources?: string[]; // NEU: Quellen aus Knowledge Base
+  sources?: string[]; // Quellen aus Knowledge Base
+  navigationTarget?: string; // NEU: Ziel für Navigation
 }
 
 interface Model {
@@ -24,6 +27,9 @@ interface KnowledgeBaseFile {
 }
 
 const Chatbot: React.FC = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { account } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState('');
@@ -37,13 +43,68 @@ const Chatbot: React.FC = () => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
   
-  // NEU: Knowledge Base Viewer
+  // Knowledge Base Viewer
   const [showKnowledgeBase, setShowKnowledgeBase] = useState(false);
   const [knowledgeBaseFiles, setKnowledgeBaseFiles] = useState<KnowledgeBaseFile[]>([]);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { instance, accounts } = useMsal();
+
+  // NEU: Navigation-Keywords Mapping
+  const navigationKeywords = {
+    '/contact': ['kontakt', 'contact', 'kontaktformular', 'contact form', 'anfrage', 'nachricht senden', 'message', 'erreichen', 'email', 'telefon', 'phone'],
+    '/services': ['service', 'dienstleistung', 'web development', 'mobile app', 'consulting', 'beratung', 'entwicklung'],
+    '/products': ['produkt', 'product', 'product a', 'product b', 'enterprise', 'smb', 'lösung', 'solution'],
+    '/about': ['über uns', 'about', 'unternehmen', 'company', 'wer sind', 'who are', 'team', 'geschichte'],
+    '/blog': ['blog', 'artikel', 'article', 'news', 'updates', 'neuigkeiten', 'beitrag'],
+    '/faq': ['faq', 'häufig', 'frequently', 'frage', 'question', 'hilfe', 'help', 'support'],
+    '/': ['home', 'startseite', 'hauptseite', 'main page', 'homepage', 'start']
+  };
+
+  // NEU: Funktion zur Erkennung der Zielseite
+  const detectNavigationTarget = (text: string): string | null => {
+    const lowerText = text.toLowerCase();
+    
+    for (const [path, keywords] of Object.entries(navigationKeywords)) {
+      if (keywords.some(keyword => lowerText.includes(keyword))) {
+        return path;
+      }
+    }
+    return null;
+  };
+
+  // NEU: Auto-Navigation bei Assistant-Antworten
+  const handleNavigation = (target: string) => {
+    if (location.pathname !== target) {
+      navigate(target);
+      
+      // Visuelles Feedback
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'navigation-notice';
+      messageDiv.textContent = `📍 Navigiere zu: ${getPageName(target)}`;
+      
+      const chatMessages = document.querySelector('.chatbot-messages');
+      if (chatMessages) {
+        chatMessages.appendChild(messageDiv);
+        setTimeout(() => messageDiv.remove(), 3000);
+      }
+    }
+  };
+
+  // NEU: Seitennamen-Mapping
+  const getPageName = (path: string): string => {
+    const pageNames: { [key: string]: string } = {
+      '/': 'Home',
+      '/contact': 'Contact',
+      '/services': 'Services',
+      '/products': 'Products',
+      '/about': 'About Us',
+      '/blog': 'Blog',
+      '/faq': 'FAQ'
+    };
+    return pageNames[path] || 'Page';
+  };
 
   // Event Listener für "Get Started" Button
   useEffect(() => {
@@ -79,7 +140,7 @@ const Chatbot: React.FC = () => {
     }
   }, [instance, accounts]);
 
-  // NEU: Knowledge Base Files laden
+  // Knowledge Base Files laden
   const fetchKnowledgeBaseFiles = useCallback(async () => {
     try {
       const token = await getAccessToken();
@@ -125,7 +186,7 @@ const Chatbot: React.FC = () => {
     }
   }, [getAccessToken]);
 
-  // NEU: Delete file from Knowledge Base
+  // Delete file from Knowledge Base
   const deleteKnowledgeBaseFile = async (fileId: string, fileName: string) => {
     if (!confirm(`Delete "${fileName}" from knowledge base?`)) return;
     
@@ -310,15 +371,26 @@ const Chatbot: React.FC = () => {
 
       const data = await response.json();
 
+      // NEU: Erkennung des Navigationsziels
+      const navigationTarget = detectNavigationTarget(data.response);
+
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: data.response,
         timestamp: new Date(),
-        sources: data.sources // NEU: Quellen hinzufügen
+        sources: data.sources,
+        navigationTarget: navigationTarget || undefined // NEU: Navigation Target hinzufügen
       };
 
       setMessages(prev => [...prev, assistantMessage]);
+
+      // NEU: Automatische Navigation wenn Ziel erkannt wurde
+      if (navigationTarget) {
+        setTimeout(() => {
+          handleNavigation(navigationTarget);
+        }, 500); // Kurze Verzögerung für bessere UX
+      }
     } catch (error) {
       console.error('Chat error:', error);
       const errorMessage: Message = {
@@ -347,7 +419,7 @@ const Chatbot: React.FC = () => {
   // Effects
   useEffect(() => {
     fetchModels();
-    fetchKnowledgeBaseFiles(); // NEU: KB Files beim Start laden
+    fetchKnowledgeBaseFiles();
   }, [fetchModels, fetchKnowledgeBaseFiles]);
 
   useEffect(() => {
@@ -407,7 +479,7 @@ const Chatbot: React.FC = () => {
               Upload
             </button>
             
-            {/* NEU: Knowledge Base Button */}
+            {/* Knowledge Base Button */}
             <button
               className="kb-view-button"
               onClick={() => setShowKnowledgeBase(!showKnowledgeBase)}
@@ -417,7 +489,7 @@ const Chatbot: React.FC = () => {
             </button>
           </div>
 
-          {/* NEU: Knowledge Base Viewer */}
+          {/* Knowledge Base Viewer */}
           {showKnowledgeBase && (
             <div className="kb-viewer">
               <div className="kb-viewer-header">
@@ -508,8 +580,9 @@ const Chatbot: React.FC = () => {
           <div className="chatbot-messages">
             {messages.length === 0 ? (
               <div className="welcome-message">
-                <p>Hello! How can I help you today?</p>
-                <p>You can ask me about our services, products, or any documents in the knowledge base.</p>
+                <p>Hello {account.name}! What's your question?</p>
+                <p>You can ask me questions about this website, including documents in its knowledge base.</p>
+                <p className="navigation-hint">💡 I can also navigate you to the relevant pages!</p>
               </div>
             ) : (
               messages.map(message => (
@@ -519,7 +592,13 @@ const Chatbot: React.FC = () => {
                 >
                   <div className="message-content">
                     {message.content}
-                    {/* NEU: Quellen anzeigen */}
+                    {/* NEU: Navigation Indicator */}
+                    {message.navigationTarget && (
+                      <div className="navigation-indicator">
+                        📍 {getPageName(message.navigationTarget)}
+                      </div>
+                    )}
+                    {/* Quellen anzeigen */}
                     {message.sources && message.sources.length > 0 && (
                       <div className="message-sources">
                         <span className="source-label">Source:</span>

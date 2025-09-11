@@ -24,7 +24,7 @@ const Header = () => {
     <header className="header">
       <div className="container">
         <Link to="/" className="logo">
-          <h1>{appConfig.appName}</h1>
+          <h1>AI in Websites</h1>
         </Link>
         
         <div className="header-right">
