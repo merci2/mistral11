@@ -5,8 +5,6 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-// Auth middleware ist optional importiert
-// import { authMiddleware, adminMiddleware } from './middleware/auth';
 import { ChatService } from './services/chatService';
 import { VectorStoreService } from './services/vectorStoreService';
 
@@ -281,13 +279,21 @@ app.use((error: any, req: Request, res: Response, next: NextFunction) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start server
-app.listen(PORT, async () => {
-  console.log(`\nServer running on port ${PORT}`);
-  console.log(`Health check: http://localhost:${PORT}/api/health`);
-  console.log(`Chat endpoint: http://localhost:${PORT}/api/chat`);
-  console.log(`Upload endpoint: http://localhost:${PORT}/api/admin/upload`);
-  console.log(`Stats endpoint: http://localhost:${PORT}/api/admin/stats\n`);
-  
-  await initializeServices();
-});
+// Für Vercel: Nur in lokaler Entwicklung den Server starten
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, async () => {
+    console.log(`\nServer running on port ${PORT}`);
+    console.log(`Health check: http://localhost:${PORT}/api/health`);
+    console.log(`Chat endpoint: http://localhost:${PORT}/api/chat`);
+    console.log(`Upload endpoint: http://localhost:${PORT}/api/admin/upload`);
+    console.log(`Stats endpoint: http://localhost:${PORT}/api/admin/stats\n`);
+    
+    await initializeServices();
+  });
+}
+
+// Services initialisieren auch für Vercel
+initializeServices();
+
+// Export app als default für Vercel
+export default app;
