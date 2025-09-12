@@ -1,4 +1,3 @@
-// backend/src/server.ts
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -19,8 +18,18 @@ interface RequestWithFile extends Request {
 }
 
 // Middleware
-app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// CORS Configuration
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production' 
+    ? ['https://mistral11.vercel.app', 'https://mistral11-*.vercel.app']
+    : ['http://localhost:3000', 'http://localhost:5173'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 // Simplified auth middleware for development
 const optionalAuth = (req: any, res: any, next: any) => {
@@ -38,43 +47,66 @@ const optionalAuth = (req: any, res: any, next: any) => {
 const authMiddleware = optionalAuth;
 const adminMiddleware = (req: any, res: any, next: any) => next();
 
-// File upload configuration
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadPath = path.join(__dirname, '../uploads');
-    if (!fs.existsSync(uploadPath)) {
-      fs.mkdirSync(uploadPath, { recursive: true });
-    }
-    cb(null, uploadPath);
-  },
-  filename: (req, file, cb) => {
-    // Sichere Dateinamen generieren
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const safeFileName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
-    cb(null, uniqueSuffix + '-' + safeFileName);
-  }
-});
+// File upload configuration - unterschiedlich für lokale Entwicklung vs Vercel
+let upload: multer.Multer;
 
-const upload = multer({ 
-  storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = ['.pdf', '.txt', '.docx', '.md'];
-    const ext = path.extname(file.originalname).toLowerCase();
-    
-    // Zusätzliche MIME-Type Validierung für PDFs
-    if (ext === '.pdf' && file.mimetype !== 'application/pdf') {
-      cb(new Error('Invalid PDF file') as any);
-      return;
+if (process.env.NODE_ENV === 'production') {
+  // Für Vercel: Memory Storage
+  const storage = multer.memoryStorage();
+  upload = multer({
+    storage,
+    limits: {
+      fileSize: 10 * 1024 * 1024, // 10MB
+    },
+    fileFilter: (req, file, cb) => {
+      const allowedTypes = ['.pdf', '.txt', '.md', '.doc', '.docx'];
+      const ext = path.extname(file.originalname).toLowerCase();
+      
+      if (allowedTypes.includes(ext)) {
+        cb(null, true);
+      } else {
+        cb(new Error(`Invalid file type. Allowed types: ${allowedTypes.join(', ')}`) as any);
+      }
     }
-    
-    if (allowedTypes.includes(ext)) {
-      cb(null, true);
-    } else {
-      cb(new Error(`Invalid file type. Allowed types: ${allowedTypes.join(', ')}`) as any);
+  });
+} else {
+  // Für lokale Entwicklung: Disk Storage
+  const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+      const uploadPath = path.join(__dirname, '../uploads');
+      if (!fs.existsSync(uploadPath)) {
+        fs.mkdirSync(uploadPath, { recursive: true });
+      }
+      cb(null, uploadPath);
+    },
+    filename: (req, file, cb) => {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const safeFileName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
+      cb(null, uniqueSuffix + '-' + safeFileName);
     }
-  }
-});
+  });
+
+  upload = multer({ 
+    storage,
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+    fileFilter: (req, file, cb) => {
+      const allowedTypes = ['.pdf', '.txt', '.docx', '.md'];
+      const ext = path.extname(file.originalname).toLowerCase();
+      
+      // Zusätzliche MIME-Type Validierung für PDFs
+      if (ext === '.pdf' && file.mimetype !== 'application/pdf') {
+        cb(new Error('Invalid PDF file') as any);
+        return;
+      }
+      
+      if (allowedTypes.includes(ext)) {
+        cb(null, true);
+      } else {
+        cb(new Error(`Invalid file type. Allowed types: ${allowedTypes.join(', ')}`) as any);
+      }
+    }
+  });
+}
 
 // Services
 const chatService = new ChatService();
@@ -101,8 +133,9 @@ app.get('/api/health', (req: Request, res: Response) => {
   const stats = vectorStoreService.getStats();
   res.json({ 
     status: 'OK', 
-    message: 'Server is running',
+    message: process.env.NODE_ENV === 'production' ? 'Server is running on Vercel' : 'Server is running locally',
     timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
     knowledgeBase: {
       documents: stats.totalDocuments,
       chunks: stats.totalChunks
@@ -138,7 +171,7 @@ app.post('/api/chat', async (req: Request, res: Response) => {
   }
 });
 
-// Admin: Upload files to knowledge base
+// Admin: Upload files to knowledge base - ANGEPASST für Memory Buffer (Vercel)
 app.post('/api/admin/upload', upload.single('file'), async (req: RequestWithFile, res: Response) => {
   try {
     const uploadedFile = req.file;
@@ -163,7 +196,14 @@ app.post('/api/admin/upload', upload.single('file'), async (req: RequestWithFile
     }
     
     // Process and add to vector store
-    await vectorStoreService.addDocument(uploadedFile.path, uploadedFile.originalname);
+    // Unterscheide zwischen lokalem File Path und Memory Buffer
+    if (process.env.NODE_ENV === 'production') {
+      // Vercel: Verwende Buffer
+      await vectorStoreService.addDocument(uploadedFile.buffer, uploadedFile.originalname);
+    } else {
+      // Lokal: Verwende File Path
+      await vectorStoreService.addDocument(uploadedFile.path, uploadedFile.originalname);
+    }
     
     // Get updated stats
     const stats = vectorStoreService.getStats();
@@ -178,13 +218,15 @@ app.post('/api/admin/upload', upload.single('file'), async (req: RequestWithFile
   } catch (error) {
     console.error('Upload error:', error);
     
-    // Cleanup bei Fehler
-    const uploadedFile = req.file;
-    if (uploadedFile && uploadedFile.path) {
-      try {
-        fs.unlinkSync(uploadedFile.path);
-      } catch (e) {
-        // Ignore cleanup errors
+    // Cleanup bei Fehler (nur lokal)
+    if (process.env.NODE_ENV !== 'production') {
+      const uploadedFile = req.file;
+      if (uploadedFile && uploadedFile.path) {
+        try {
+          fs.unlinkSync(uploadedFile.path);
+        } catch (e) {
+          // Ignore cleanup errors
+        }
       }
     }
     

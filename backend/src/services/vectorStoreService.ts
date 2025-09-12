@@ -161,7 +161,106 @@ export class VectorStoreService {
     return chunks;
   }
 
-  // Spezielle Methode für PDF-Verarbeitung
+  // NEU: Buffer parsing für Vercel
+  private async parseBuffer(buffer: Buffer, originalName: string): Promise<string> {
+    const ext = path.extname(originalName).toLowerCase();
+
+    switch (ext) {
+      case '.txt':
+      case '.md':
+        return buffer.toString('utf-8');
+
+      case '.pdf':
+        try {
+          const pdfParse = require('pdf-parse');
+          const pdfData = await pdfParse(buffer);
+          return pdfData.text;
+        } catch (error) {
+          console.error('PDF parsing error:', error);
+          throw new Error('Failed to parse PDF file. Make sure pdf-parse is installed.');
+        }
+
+      case '.docx':
+        try {
+          const mammoth = require('mammoth');
+          const result = await mammoth.extractRawText({ buffer });
+          return result.value;
+        } catch (error) {
+          console.log('DOCX parsing not available, treating as text');
+          return buffer.toString('utf-8');
+        }
+
+      default:
+        return buffer.toString('utf-8');
+    }
+  }
+
+  // GEÄNDERT: Hauptmethode erweitert für Buffer UND File Path
+  async addDocument(input: string | Buffer, originalName: string): Promise<void> {
+    try {
+      let content: string;
+
+      // Unterscheide zwischen Buffer (Vercel) und File Path (lokal)
+      if (Buffer.isBuffer(input)) {
+        console.log(`Processing buffer for: ${originalName}`);
+        content = await this.parseBuffer(input, originalName);
+      } else {
+        // Originallogik für File Path beibehalten
+        const ext = path.extname(input).toLowerCase();
+        
+        if (ext === '.pdf') {
+          return this.processAndAddPDF(input, originalName);
+        }
+        
+        console.log(`Processing file: ${originalName}`);
+        content = await this.parseFile(input);
+        await fs.unlink(input); // Cleanup
+      }
+
+      if (!content || content.trim().length === 0) {
+        throw new Error('No text content extracted from file');
+      }
+
+      console.log(`Extracted ${content.length} characters from ${originalName}`);
+
+      const textChunks = this.splitText(content, 1000, 100);
+      const uploadDate = new Date().toISOString();
+
+      console.log(`Split into ${textChunks.length} chunks`);
+
+      // Chunks mit Embeddings speichern
+      for (let i = 0; i < textChunks.length; i++) {
+        const chunkText = textChunks[i];
+        
+        if (chunkText.length < 50) continue;
+        
+        const embedding = await this.getEmbedding(chunkText);
+
+        const chunk: DocumentChunk = {
+          id: `${originalName}_chunk_${i}_${Date.now()}`,
+          text: chunkText,
+          source: originalName,
+          uploadDate: uploadDate,
+          embedding: embedding
+        };
+
+        this.chunks.push(chunk);
+      }
+
+      const docId = this.generateDocId(originalName);
+      this.documents.set(docId, {
+        name: originalName,
+        uploadDate: new Date()
+      });
+
+      console.log(`Document ${originalName} successfully added: ${textChunks.length} chunks created`);
+    } catch (error) {
+      console.error('Error adding document:', error);
+      throw error;
+    }
+  }
+
+  // Spezielle Methode für PDF-Verarbeitung (UNVERÄNDERT)
   async processAndAddPDF(filePath: string, originalName: string): Promise<void> {
     try {
       console.log(`Processing PDF: ${originalName}`);
@@ -224,53 +323,7 @@ export class VectorStoreService {
     }
   }
 
-  // Hauptmethode zum Hinzufügen von Dokumenten (ruft processAndAddPDF für PDFs auf)
-  async addDocument(filePath: string, originalName: string): Promise<void> {
-    const ext = path.extname(filePath).toLowerCase();
-    
-    // Verwende spezielle PDF-Verarbeitung für PDF-Dateien
-    if (ext === '.pdf') {
-      return this.processAndAddPDF(filePath, originalName);
-    }
-    
-    // Standard-Verarbeitung für andere Dateitypen
-    try {
-      const content = await this.parseFile(filePath);
-
-      const textChunks = this.splitText(content);
-      const uploadDate = new Date().toISOString();
-
-      for (let i = 0; i < textChunks.length; i++) {
-        const chunkText = textChunks[i];
-        const embedding = await this.getEmbedding(chunkText);
-
-        const chunk: DocumentChunk = {
-          id: `${originalName}_${i}_${Date.now()}`,
-          text: chunkText,
-          source: originalName,
-          uploadDate: uploadDate,
-          embedding: embedding
-        };
-
-        this.chunks.push(chunk);
-      }
-
-      const docId = this.generateDocId(originalName);
-      this.documents.set(docId, {
-        name: originalName,
-        uploadDate: new Date()
-      });
-
-      await fs.unlink(filePath);
-
-      console.log(`Document ${originalName} added: ${textChunks.length} chunks`);
-    } catch (error) {
-      console.error('Error adding document:', error);
-      throw error;
-    }
-  }
-
-  // Verbesserte Suche mit mehr Kontext
+  // Verbesserte Suche mit mehr Kontext (UNVERÄNDERT)
   async searchSimilar(query: string, topK: number = 5): Promise<string> {
     try {
       if (this.chunks.length === 0) {
